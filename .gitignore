@@ -136,7 +136,6 @@ celerybeat.pid
 
 # Environments
 .env
-.envrc
 .venv
 env/
 venv/
@@ -209,3 +208,6 @@ __marimo__/
 # n8n local data
 n8n/data/
 n8n/backup/
+
+# MCP configuration with hardcoded keys (our .mcp.json uses env vars so it's safe to commit)
+# .mcp.json
