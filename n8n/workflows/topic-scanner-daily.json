@@ -1,0 +1,489 @@
+{
+  "name": "Topic Scanner Daily",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "triggerAtHour": 8
+            }
+          ]
+        }
+      },
+      "id": "schedule-trigger",
+      "name": "Daily Schedule",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [0, 300]
+    },
+    {
+      "parameters": {
+        "mode": "raw",
+        "jsonOutput": "={\n  \"searchTopic\": \"AI agents\",\n  \"recipientEmail\": \"your-email@example.com\",\n  \"maxResultsPerSource\": 20,\n  \"maxSearchQueries\": 3,\n  \"subreddits\": [\"artificial\", \"MachineLearning\", \"LocalLLaMA\"]\n}",
+        "options": {}
+      },
+      "id": "set-topic",
+      "name": "Set Topic",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [220, 300],
+      "notesInFlow": true,
+      "notes": "Configure your search topic, recipient email, and subreddits here"
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "=https://www.reddit.com/r/{{ $json.subreddits.join('+') }}/search.json",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "q",
+              "value": "={{ $json.searchTopic }}"
+            },
+            {
+              "name": "sort",
+              "value": "new"
+            },
+            {
+              "name": "t",
+              "value": "day"
+            },
+            {
+              "name": "limit",
+              "value": "={{ $json.maxResultsPerSource }}"
+            }
+          ]
+        },
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "json"
+            }
+          }
+        }
+      },
+      "id": "reddit-search",
+      "name": "Reddit Search",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [440, 140]
+    },
+    {
+      "parameters": {
+        "model": "gpt-4o-mini",
+        "messages": {
+          "values": [
+            {
+              "role": "system",
+              "content": "You are a search query optimization expert. Your task is to take a natural language topic and generate effective web search queries that will find the most relevant and recent content.\n\nGuidelines:\n- Generate 2-4 distinct search queries that cover different aspects of the topic\n- Use specific keywords and phrases that search engines respond well to\n- Include variations: some broader, some more specific\n- Consider different phrasings and synonyms\n- Add terms like \"news\", \"latest\", \"announcement\", \"release\" where appropriate for timely content\n- Avoid overly long queries - keep them focused\n\nReturn a JSON object with:\n- \"queries\": array of search query strings\n- \"reasoning\": brief explanation of your query strategy"
+            },
+            {
+              "role": "user",
+              "content": "=Generate {{ $json.maxSearchQueries || 3 }} optimized search queries for the following topic:\n\n\"{{ $json.searchTopic }}\"\n\nReturn well-formed search queries that will find relevant web content from the past 24 hours."
+            }
+          ]
+        },
+        "jsonOutput": true,
+        "options": {
+          "temperature": 0.5
+        }
+      },
+      "id": "generate-queries",
+      "name": "Generate Search Queries",
+      "type": "@n8n/n8n-nodes-langchain.openAi",
+      "typeVersion": 1.8,
+      "position": [440, 400],
+      "credentials": {
+        "openAiApi": {
+          "id": "",
+          "name": "OpenAI"
+        }
+      },
+      "notesInFlow": true,
+      "notes": "LLM converts natural language topic into optimized search queries"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Parse LLM response and create individual items for each search query\nconst topicData = $('Set Topic').first().json;\nlet llmResponse;\n\ntry {\n  const rawResponse = $input.first().json;\n  \n  // Handle various response formats from the LLM node\n  if (typeof rawResponse.message?.content === 'string') {\n    llmResponse = JSON.parse(rawResponse.message.content);\n  } else if (rawResponse.queries) {\n    llmResponse = rawResponse;\n  } else if (rawResponse.message?.content?.queries) {\n    llmResponse = rawResponse.message.content;\n  } else {\n    // Fallback: use the original topic as a single query\n    llmResponse = { queries: [topicData.searchTopic], reasoning: 'Fallback to original topic' };\n  }\n} catch (e) {\n  // Fallback on parse error\n  llmResponse = { queries: [topicData.searchTopic], reasoning: 'Parse error fallback' };\n}\n\nconst queries = llmResponse.queries || [topicData.searchTopic];\n\n// Return each query as a separate item for parallel SerpAPI calls\nreturn queries.map((query, index) => ({\n  json: {\n    query: query,\n    queryIndex: index,\n    totalQueries: queries.length,\n    reasoning: llmResponse.reasoning,\n    maxResults: Math.floor(topicData.maxResultsPerSource / queries.length),\n    originalTopic: topicData.searchTopic\n  }\n}));"
+      },
+      "id": "split-queries",
+      "name": "Split Search Queries",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [660, 400]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "https://serpapi.com/search",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "q",
+              "value": "={{ $json.query }}"
+            },
+            {
+              "name": "api_key",
+              "value": "={{ $credentials.serpApiApi.apiKey }}"
+            },
+            {
+              "name": "tbs",
+              "value": "qdr:d"
+            },
+            {
+              "name": "num",
+              "value": "={{ $json.maxResults || 10 }}"
+            }
+          ]
+        },
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "json"
+            }
+          }
+        }
+      },
+      "id": "serpapi-search",
+      "name": "SerpAPI Web Search",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [880, 400],
+      "credentials": {
+        "serpApiApi": {
+          "id": "",
+          "name": "SerpAPI"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Transform Reddit results into normalized format\nconst redditData = $('Reddit Search').first().json;\nconst posts = redditData?.data?.children || [];\n\nconst redditResults = posts.map(post => {\n  const data = post.data;\n  return {\n    source: 'reddit',\n    title: data.title,\n    url: `https://reddit.com${data.permalink}`,\n    snippet: data.selftext?.substring(0, 300) || '',\n    subreddit: data.subreddit,\n    score: data.score,\n    numComments: data.num_comments,\n    createdAt: new Date(data.created_utc * 1000).toISOString(),\n    author: data.author\n  };\n});\n\nreturn redditResults.map(item => ({ json: item }));"
+      },
+      "id": "transform-reddit",
+      "name": "Transform Reddit",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [660, 140]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Transform all SerpAPI results into normalized format\n// This handles multiple search queries that were run in parallel\nconst allItems = $input.all();\nconst seenUrls = new Set();\nconst webResults = [];\n\nfor (const item of allItems) {\n  const serpData = item.json;\n  const results = serpData?.organic_results || [];\n  const searchQuery = serpData?.search_parameters?.q || '';\n  \n  for (const result of results) {\n    // Deduplicate by URL across all queries\n    if (!seenUrls.has(result.link)) {\n      seenUrls.add(result.link);\n      webResults.push({\n        source: 'web',\n        title: result.title,\n        url: result.link,\n        snippet: result.snippet || '',\n        displayedLink: result.displayed_link,\n        position: result.position,\n        searchQuery: searchQuery,\n        createdAt: null\n      });\n    }\n  }\n}\n\nreturn webResults.map(item => ({ json: item }));"
+      },
+      "id": "transform-serpapi",
+      "name": "Transform SerpAPI",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1100, 400]
+    },
+    {
+      "parameters": {
+        "mode": "combine",
+        "combineBy": "combineAll",
+        "options": {}
+      },
+      "id": "merge-results",
+      "name": "Merge Results",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3,
+      "position": [1320, 280]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Combine all items into a single array for LLM processing\nconst allItems = $input.all().map(item => item.json);\nconst searchTopic = $('Set Topic').first().json.searchTopic;\nconst recipientEmail = $('Set Topic').first().json.recipientEmail;\n\nreturn [{\n  json: {\n    searchTopic,\n    recipientEmail,\n    totalResults: allItems.length,\n    results: allItems\n  }\n}];"
+      },
+      "id": "aggregate-results",
+      "name": "Aggregate Results",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1540, 280]
+    },
+    {
+      "parameters": {
+        "model": "gpt-4o-mini",
+        "messages": {
+          "values": [
+            {
+              "role": "system",
+              "content": "You are a content relevancy analyst. Your task is to review search results and determine which ones are highly relevant to the given topic.\n\nFor each result, evaluate:\n1. How directly it relates to the topic\n2. Whether it provides valuable insights, news, or discussions\n3. Whether it's recent and timely content\n\nReturn a JSON object with:\n- \"relevant\": array of relevant results with added \"relevanceReason\" field\n- \"summary\": a 2-3 sentence summary of the key themes found\n- \"topHighlights\": top 3 most important findings"
+            },
+            {
+              "role": "user",
+              "content": "=Topic: {{ $json.searchTopic }}\n\nResults to analyze:\n{{ JSON.stringify($json.results, null, 2) }}\n\nFilter these results for high relevancy to the topic. Only include results that are directly relevant and valuable. Add a \"relevanceReason\" field to each relevant result explaining why it's relevant."
+            }
+          ]
+        },
+        "jsonOutput": true,
+        "options": {
+          "temperature": 0.3
+        }
+      },
+      "id": "llm-filter",
+      "name": "LLM Relevancy Filter",
+      "type": "@n8n/n8n-nodes-langchain.openAi",
+      "typeVersion": 1.8,
+      "position": [1760, 280],
+      "credentials": {
+        "openAiApi": {
+          "id": "",
+          "name": "OpenAI"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Parse LLM response and structure for email\nlet llmResponse;\n\ntry {\n  // Handle if response is already parsed or needs parsing\n  const rawResponse = $('LLM Relevancy Filter').first().json;\n  \n  if (typeof rawResponse.message?.content === 'string') {\n    llmResponse = JSON.parse(rawResponse.message.content);\n  } else if (rawResponse.relevant) {\n    llmResponse = rawResponse;\n  } else {\n    llmResponse = rawResponse.message?.content || rawResponse;\n  }\n} catch (e) {\n  llmResponse = {\n    relevant: [],\n    summary: 'Error parsing LLM response',\n    topHighlights: []\n  };\n}\n\nconst searchTopic = $('Set Topic').first().json.searchTopic;\nconst recipientEmail = $('Set Topic').first().json.recipientEmail;\n\nreturn [{\n  json: {\n    searchTopic,\n    recipientEmail,\n    relevantCount: llmResponse.relevant?.length || 0,\n    relevant: llmResponse.relevant || [],\n    summary: llmResponse.summary || '',\n    topHighlights: llmResponse.topHighlights || [],\n    hasResults: (llmResponse.relevant?.length || 0) > 0\n  }\n}];"
+      },
+      "id": "parse-llm",
+      "name": "Parse LLM Response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1980, 280]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "leftValue": "",
+            "caseSensitive": true,
+            "typeValidation": "strict"
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "has-results",
+              "leftValue": "={{ $json.hasResults }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "check-results",
+      "name": "Has Results?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [2200, 280]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Format results into HTML email digest\nconst data = $('Parse LLM Response').first().json;\nconst now = new Date().toLocaleDateString('en-US', {\n  weekday: 'long',\n  year: 'numeric',\n  month: 'long',\n  day: 'numeric'\n});\n\nlet html = `\n<!DOCTYPE html>\n<html>\n<head>\n  <style>\n    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 800px; margin: 0 auto; padding: 20px; background: #f5f5f5; }\n    .container { background: white; border-radius: 12px; padding: 30px; box-shadow: 0 2px 8px rgba(0,0,0,0.1); }\n    h1 { color: #1a1a1a; border-bottom: 3px solid #4f46e5; padding-bottom: 10px; }\n    h2 { color: #4f46e5; margin-top: 30px; }\n    .summary { background: #f0f0ff; padding: 20px; border-radius: 8px; margin: 20px 0; border-left: 4px solid #4f46e5; }\n    .highlight { background: #fffbeb; padding: 12px 16px; border-radius: 6px; margin: 8px 0; border-left: 3px solid #f59e0b; }\n    .result { border: 1px solid #e5e5e5; border-radius: 8px; padding: 16px; margin: 12px 0; transition: box-shadow 0.2s; }\n    .result:hover { box-shadow: 0 2px 8px rgba(0,0,0,0.1); }\n    .result-title { font-size: 16px; font-weight: 600; color: #1a1a1a; text-decoration: none; }\n    .result-title:hover { color: #4f46e5; }\n    .result-meta { font-size: 12px; color: #666; margin-top: 4px; }\n    .result-snippet { font-size: 14px; color: #444; margin-top: 8px; line-height: 1.5; }\n    .result-reason { font-size: 13px; color: #4f46e5; margin-top: 8px; font-style: italic; }\n    .source-badge { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 11px; font-weight: 600; text-transform: uppercase; }\n    .source-reddit { background: #ff4500; color: white; }\n    .source-web { background: #4285f4; color: white; }\n    .footer { margin-top: 30px; padding-top: 20px; border-top: 1px solid #e5e5e5; font-size: 12px; color: #888; text-align: center; }\n  </style>\n</head>\n<body>\n  <div class=\"container\">\n    <h1>Daily Topic Digest: ${data.searchTopic}</h1>\n    <p style=\"color: #666;\">${now} | ${data.relevantCount} relevant results found</p>\n    \n    <div class=\"summary\">\n      <strong>Summary:</strong> ${data.summary}\n    </div>\n`;\n\nif (data.topHighlights && data.topHighlights.length > 0) {\n  html += `<h2>Top Highlights</h2>`;\n  data.topHighlights.forEach((highlight, i) => {\n    html += `<div class=\"highlight\"><strong>${i + 1}.</strong> ${highlight}</div>`;\n  });\n}\n\nhtml += `<h2>All Relevant Results</h2>`;\n\ndata.relevant.forEach(result => {\n  const sourceClass = result.source === 'reddit' ? 'source-reddit' : 'source-web';\n  const sourceLabel = result.source === 'reddit' ? 'Reddit' : 'Web';\n  const meta = result.source === 'reddit' \n    ? `r/${result.subreddit} | ${result.score} points | ${result.numComments} comments`\n    : result.displayedLink || '';\n  \n  html += `\n    <div class=\"result\">\n      <span class=\"source-badge ${sourceClass}\">${sourceLabel}</span>\n      <div style=\"margin-top: 8px;\">\n        <a href=\"${result.url}\" class=\"result-title\" target=\"_blank\">${result.title}</a>\n      </div>\n      <div class=\"result-meta\">${meta}</div>\n      ${result.snippet ? `<div class=\"result-snippet\">${result.snippet}</div>` : ''}\n      ${result.relevanceReason ? `<div class=\"result-reason\">\"${result.relevanceReason}\"</div>` : ''}\n    </div>\n  `;\n});\n\nhtml += `\n    <div class=\"footer\">\n      Generated by n8n Topic Scanner | Powered by LLM relevancy filtering\n    </div>\n  </div>\n</body>\n</html>\n`;\n\nreturn [{\n  json: {\n    recipientEmail: data.recipientEmail,\n    subject: `[Topic Digest] ${data.searchTopic} - ${data.relevantCount} results (${now})`,\n    htmlBody: html\n  }\n}];"
+      },
+      "id": "format-email",
+      "name": "Format Email Digest",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2420, 180]
+    },
+    {
+      "parameters": {
+        "sendTo": "={{ $json.recipientEmail }}",
+        "subject": "={{ $json.subject }}",
+        "emailType": "html",
+        "message": "={{ $json.htmlBody }}",
+        "options": {}
+      },
+      "id": "send-gmail",
+      "name": "Send Gmail",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [2640, 180],
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "",
+          "name": "Gmail"
+        }
+      }
+    },
+    {
+      "parameters": {},
+      "id": "no-results",
+      "name": "No Results",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [2420, 380]
+    }
+  ],
+  "connections": {
+    "Daily Schedule": {
+      "main": [
+        [
+          {
+            "node": "Set Topic",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Set Topic": {
+      "main": [
+        [
+          {
+            "node": "Reddit Search",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Generate Search Queries",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Reddit Search": {
+      "main": [
+        [
+          {
+            "node": "Transform Reddit",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Generate Search Queries": {
+      "main": [
+        [
+          {
+            "node": "Split Search Queries",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Split Search Queries": {
+      "main": [
+        [
+          {
+            "node": "SerpAPI Web Search",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "SerpAPI Web Search": {
+      "main": [
+        [
+          {
+            "node": "Transform SerpAPI",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Transform Reddit": {
+      "main": [
+        [
+          {
+            "node": "Merge Results",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Transform SerpAPI": {
+      "main": [
+        [
+          {
+            "node": "Merge Results",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Merge Results": {
+      "main": [
+        [
+          {
+            "node": "Aggregate Results",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Aggregate Results": {
+      "main": [
+        [
+          {
+            "node": "LLM Relevancy Filter",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "LLM Relevancy Filter": {
+      "main": [
+        [
+          {
+            "node": "Parse LLM Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse LLM Response": {
+      "main": [
+        [
+          {
+            "node": "Has Results?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Has Results?": {
+      "main": [
+        [
+          {
+            "node": "Format Email Digest",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "No Results",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format Email Digest": {
+      "main": [
+        [
+          {
+            "node": "Send Gmail",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "tags": [],
+  "triggerCount": 1,
+  "pinData": {}
+}
