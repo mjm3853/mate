@@ -6,24 +6,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Mate is a workflow automation toolkit built around self-hosted n8n with LLM integrations and MCP (Model Context Protocol) server support for AI assistant interactions.
 
-## Project Structure
-
-```
-mate/
-├── docker-compose.yml      # n8n, n8n-mcp, and PostgreSQL services
-├── .env.example            # Environment variables template
-├── config/
-│   └── claude_desktop_config.example.json  # MCP config for Claude Desktop
-├── n8n/
-│   ├── data/              # n8n persistent data (gitignored)
-│   ├── workflows/         # Exported workflow JSON files
-│   └── backup/            # Workflow backups (gitignored)
-└── hello.py               # Python utilities (future)
-```
-
 ## Development Commands
 
-### n8n Services
+### Docker Services
 
 ```bash
 # Start all services (n8n, n8n-mcp, PostgreSQL)
@@ -43,31 +28,24 @@ docker compose restart n8n
 ### First-Time Setup
 
 ```bash
-# Copy and configure environment
 cp .env.example .env
-# Edit .env with your API keys and tokens
+# Edit .env with API keys
 
-# Start services
 docker compose up -d
-
 # Access n8n at http://localhost:5678
-# Create account and generate API key from Settings > API
-# Add API key to .env as N8N_API_KEY
+# Create account, generate API key from Settings > API, add to .env as N8N_API_KEY
 ```
 
-### MCP Server Access
+### Workflow Management
 
-The n8n-mcp service runs at `http://localhost:3000` and provides:
-- HTTP Streamable endpoint: `http://localhost:3000/mcp`
-- Access to 1,084 n8n node documentation for AI assistants
-- Workflow management when N8N_API_KEY is configured
+```bash
+# Export a workflow from n8n (replace WORKFLOW_ID)
+curl -H "X-N8N-API-KEY: $N8N_API_KEY" http://localhost:5678/api/v1/workflows/WORKFLOW_ID > n8n/workflows/workflow-name.json
 
-### Claude Desktop Integration
-
-Copy config from `config/claude_desktop_config.example.json` to:
-- macOS: `~/Library/Application Support/Claude/claude_desktop_config.json`
-- Windows: `%APPDATA%\Claude\claude_desktop_config.json`
-- Linux: `~/.config/Claude/claude_desktop_config.json`
+# Import a workflow to n8n
+curl -X POST -H "X-N8N-API-KEY: $N8N_API_KEY" -H "Content-Type: application/json" \
+  -d @n8n/workflows/workflow-name.json http://localhost:5678/api/v1/workflows
+```
 
 ### Python Utilities
 
@@ -81,35 +59,27 @@ uv run pytest
 
 ### Services
 
-- **n8n** (port 5678): Workflow automation engine with AI nodes enabled
-- **n8n-mcp** (port 3000): MCP server providing n8n documentation to AI assistants
+- **n8n** (port 5678): Workflow automation engine with AI nodes enabled (`N8N_AI_ENABLED=true`)
+- **n8n-mcp** (port 3000): MCP server providing n8n node documentation to AI assistants
 - **PostgreSQL**: Persistent storage for workflows and execution history
 
-### n8n MCP Integration
+### MCP Integration
 
 Two approaches for AI assistant integration:
 
-1. **n8n-mcp server** (this setup): Gives AI assistants knowledge about n8n nodes and can manage workflows via API
+1. **n8n-mcp server** (this setup): HTTP endpoint at `http://localhost:3000/mcp` - gives AI assistants knowledge about n8n's 1,084 nodes and can manage workflows via API
 2. **n8n's built-in MCP Server Trigger**: Exposes specific workflows as MCP tools (configure within n8n UI)
 
-### LLM Integrations
+### Claude Desktop Integration
 
-Configure API keys in `.env` for n8n's AI nodes:
-- OpenAI (GPT-4, etc.)
-- Anthropic (Claude)
-- Add others as needed (Google AI, Azure OpenAI, HuggingFace)
+Copy `config/claude_desktop_config.example.json` to:
+- macOS: `~/Library/Application Support/Claude/claude_desktop_config.json`
+- Windows: `%APPDATA%\Claude\claude_desktop_config.json`
+- Linux: `~/.config/Claude/claude_desktop_config.json`
 
-## Key Environment Variables
+## Workflow Patterns
 
-| Variable | Purpose |
-|----------|---------|
-| `N8N_API_KEY` | n8n API access for MCP workflow management |
-| `MCP_AUTH_TOKEN` | Bearer token for MCP HTTP authentication |
-| `OPENAI_API_KEY` | OpenAI API for n8n AI nodes |
-| `ANTHROPIC_API_KEY` | Anthropic API for n8n AI nodes |
-| `POSTGRES_PASSWORD` | Database password (change in production) |
+Exported workflows in `n8n/workflows/` demonstrate:
 
-## Requirements
-
-- Docker and Docker Compose
-- Python 3.12+ (for local utilities)
+- **sample-llm-webhook.json**: Webhook → AI Agent → Response pattern using LangChain nodes
+- **topic-scanner-daily.json**: Scheduled task → multi-source search (Reddit + SerpAPI) → LLM filtering → email digest
